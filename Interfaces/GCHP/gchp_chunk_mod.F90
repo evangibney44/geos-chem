@@ -622,7 +622,7 @@ CONTAINS
     USE Calc_Met_Mod,       ONLY : Set_Dry_Surface_Pressure
     USE Calc_Met_Mod,       ONLY : Set_Clock_Tracer
     USE Calc_Met_Mod,       ONLY : GCHP_Cap_Tropopause_Prs
-    USE Set_Global_CH4_Mod, ONLY : Set_CH4
+    USE Set_Global_CH4_Mod, ONLY : Set_CH4, Set_H2
     USE MODIS_LAI_Mod,      ONLY : Compute_XLAI
     USE PBL_Mix_Mod,        ONLY : Compute_PBL_Height
     USE Pressure_Mod,       ONLY : Set_Floating_Pressures
@@ -1301,6 +1301,9 @@ CONTAINS
        CALL SET_CH4 ( Input_Opt, State_Chm, State_Diag, &
                       State_Grid, State_Met, RC )
        _ASSERT(RC==GC_SUCCESS, 'Error calling SET_CH4')
+       CALL SET_H2 ( Input_Opt, State_Chm, State_Diag, &
+                      State_Grid, State_Met, RC )
+       _ASSERT(RC==GC_SUCCESS, 'Error calling SET_H2')    
     ENDIF
 
     !=======================================================================

@@ -268,6 +268,11 @@ MODULE State_Chm_Mod
      REAL(fp),          POINTER :: SFC_CH4    (:,:    )
 
      !-----------------------------------------------------------------------
+     ! Fields for setting mean surface H2 from HEMCO
+     !-----------------------------------------------------------------------
+     REAL(fp),          POINTER :: SFC_H2    (:,:    )
+
+     !-----------------------------------------------------------------------
      ! Fields for TOMS overhead ozone column data
      !-----------------------------------------------------------------------
      REAL(fp),          POINTER :: TO3_DAILY  (:,:    ) ! Daily overhead ozone
@@ -527,6 +532,7 @@ CONTAINS
     State_Chm%BCl               => NULL()
     State_Chm%CH4_EMIS          => NULL()
     State_Chm%SFC_CH4           => NULL()
+    State_Chm%SFC_H2            => NULL()
 
     State_Chm%UCX_REGRID        => NULL()
     State_Chm%UCX_PLEVS         => NULL()
@@ -2184,6 +2190,28 @@ CONTAINS
        RETURN
     ENDIF
 
+    !------------------------------------------------------------------------
+    ! SFC_H2
+    ! Not registered to the registry as these are fields internal to the
+    ! set_global_ch4_mod module state.
+    !------------------------------------------------------------------------
+    chmId = 'SFC_H2'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Chm  = State_Chm,                                             &
+         State_Grid = State_Grid,                                            &
+         chmId      = chmId,                                                 &
+         Ptr2Data   = State_Chm%SFC_H2,                                      &
+         noRegister = .TRUE.,                                                &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( chmId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+
 #if defined(MODEL_CESM)
     IF ( Input_Opt%ITS_A_FULLCHEM_SIM ) THEN
        !---------------------------------------------------------------------
@@ -3606,6 +3634,13 @@ CONTAINS
        CALL GC_CheckVar( 'State_Chm%SFC_CH4', 2, RC )
        IF ( RC /= GC_SUCCESS ) RETURN
        State_Chm%SFC_CH4 => NULL()
+    ENDIF
+
+    IF ( ASSOCIATED( State_Chm%SFC_H2 ) ) THEN
+       DEALLOCATE( State_Chm%SFC_H2, STAT=RC )
+       CALL GC_CheckVar( 'State_Chm%SFC_H2', 2, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       State_Chm%SFC_H2 => NULL()
     ENDIF
 
     IF ( ASSOCIATED( State_Chm%TO3_DAILY ) ) THEN

@@ -323,6 +323,9 @@ MODULE State_Diag_Mod
      REAL(f4),           POINTER :: CH4pseudoFlux(:,:)
      LOGICAL                     :: Archive_CH4pseudoFlux
 
+     REAL(f4),           POINTER :: H2pseudoFlux(:,:)
+     LOGICAL                     :: Archive_H2pseudoFlux
+
      REAL(f4),           POINTER :: SatDiagnLoss(:,:,:,:)
      TYPE(DgnMap),       POINTER :: Map_SatDiagnLoss
      LOGICAL                     :: Archive_SatDiagnLoss
@@ -1558,6 +1561,9 @@ CONTAINS
 
     State_Diag%CH4pseudoflux                       => NULL()
     State_Diag%Archive_CH4pseudoflux               = .FALSE.
+
+    State_Diag%H2pseudoflux                        => NULL()
+    State_Diag%Archive_H2pseudoflux                = .FALSE.
 
     State_Diag%SatDiagnLoss                        => NULL()
     State_Diag%Map_SatDiagnLoss                    => NULL()
@@ -5523,6 +5529,28 @@ CONTAINS
             TaggedDiagList = TaggedDiag_List,                                &
             Ptr2Data       = State_Diag%CH4pseudoFlux,                       &
             archiveData    = State_Diag%Archive_CH4pseudoFlux,               &
+            diagId         = diagId,                                         &
+            RC             = RC                                             )
+
+       IF ( RC /= GC_SUCCESS ) THEN
+          errMsg = TRIM( errMsg_ir ) // TRIM( diagId )
+          CALL GC_Error( errMsg, RC, thisLoc )
+          RETURN
+       ENDIF
+
+       !--------------------------------------------------------------------
+       ! H2 pseudo-flux
+       !--------------------------------------------------------------------
+       diagID  = 'H2pseudoFlux'
+       CALL Init_and_Register(                                               &
+            Input_Opt      = Input_Opt,                                      &
+            State_Chm      = State_Chm,                                      &
+            State_Diag     = State_Diag,                                     &
+            State_Grid     = State_Grid,                                     &
+            DiagList       = Diag_List,                                      &
+            TaggedDiagList = TaggedDiag_List,                                &
+            Ptr2Data       = State_Diag%H2pseudoFlux,                        &
+            archiveData    = State_Diag%Archive_H2pseudoFlux,                &
             diagId         = diagId,                                         &
             RC             = RC                                             )
 
@@ -11170,6 +11198,11 @@ CONTAINS
                    RC       = RC                                            )
     IF ( RC /= GC_SUCCESS ) RETURN
 
+    CALL Finalize( diagId   = 'H2pseudoFlux',                                &
+                   Ptr2Data = State_Diag%H2pseudoFlux,                       &
+                   RC       = RC                                            )
+    IF ( RC /= GC_SUCCESS ) RETURN
+
     CALL Finalize( diagId   = 'AODdust',                                     &
                    Ptr2Data = State_Diag%AODdust,                            &
                    RC       = RC                                            )
@@ -13002,6 +13035,11 @@ CONTAINS
        IF ( isUnits   ) Units = 'kg m-2 s-1'
        IF ( isRank    ) Rank  = 2
 
+    ELSE IF ( TRIM( Name_AllCaps ) == 'H2PSEUDOFLUX' ) THEN
+       IF ( isDesc    ) Desc  = 'H2 pseudo-flux balancing chemistry'
+       IF ( isUnits   ) Units = 'kg m-2 s-1'
+       IF ( isRank    ) Rank  = 2
+       
 #if defined( MODEL_GEOS ) || defined( MODEL_WRF )
     ELSE IF ( TRIM( Name_AllCaps ) == 'KPPERROR' ) THEN
        IF ( isDesc    ) Desc  = 'KppError'
