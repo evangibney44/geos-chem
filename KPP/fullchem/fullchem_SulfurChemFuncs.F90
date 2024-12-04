@@ -1367,7 +1367,7 @@ CONTAINS
        IF ( IS_FULLCHEM .and. id_HMS > 0 ) THEN
           K_CLD(4) = KaqHCHO * FC * CNVFAC
           K_CLD(5) = KaqHMS  * FC
-          K_CLD(6) = KaqHMS2 * FC
+          K_CLD(6) = KaqHMS2 * FC / Spc(id_SO2)%Conc(I,J,L)
           ! Leave comments here (bmy, 18 Jan 2022)
           !          CloudHet2R( Spc(id_HMS)%Conc(I,J,L), &
           !                      Spc(id_CH2O)%Conc(I,J,L), FC, KaqHCHO*CNVFAC )
