@@ -21,7 +21,6 @@ MODULE State_Diag_Mod
 !
 ! USES:
 !
-  USE CMN_FJX_MOD,        ONLY : W_
   USE CMN_Size_Mod,       ONLY : NDUST
   USE DiagList_Mod
   USE Dictionary_M,       ONLY : dictionary_t
@@ -299,6 +298,10 @@ MODULE State_Diag_Mod
      TYPE(DgnMap),       POINTER :: Map_SatDiagnRxnRate
      LOGICAL                     :: Archive_SatDiagnRxnRate     
 
+     REAL(f4),           POINTER :: RxnConst(:,:,:,:)
+     TYPE(DgnMap),       POINTER :: Map_RxnConst
+     LOGICAL                     :: Archive_RxnConst
+
      REAL(f4),           POINTER :: OHreactivity(:,:,:)
      LOGICAL                     :: Archive_OHreactivity
 
@@ -319,6 +322,9 @@ MODULE State_Diag_Mod
 
      REAL(f4),           POINTER :: CH4pseudoFlux(:,:)
      LOGICAL                     :: Archive_CH4pseudoFlux
+
+     REAL(f4),           POINTER :: H2pseudoFlux(:,:)
+     LOGICAL                     :: Archive_H2pseudoFlux
 
      REAL(f4),           POINTER :: SatDiagnLoss(:,:,:,:)
      TYPE(DgnMap),       POINTER :: Map_SatDiagnLoss
@@ -1181,9 +1187,6 @@ MODULE State_Diag_Mod
 
      !%%%%% Chemistry diagnostics %%%%%
 
-     REAL(f4),           POINTER :: KppError(:,:,:)
-     LOGICAL                     :: Archive_KppError
-
      REAL(f4),           POINTER :: O3concAfterChem(:,:,:)
      LOGICAL                     :: Archive_O3concAfterChem
 
@@ -1234,10 +1237,10 @@ MODULE State_Diag_Mod
      LOGICAL                     :: Archive_CO2photrate
 #endif
 
-#ifdef MODEL_WRF
+#if defined( MODEL_GEOS ) || defined( MODEL_WRF ) || defined( MODEL_CESM )
      !----------------------------------------------------------------------
      ! The following diagnostics are only used when
-     ! GEOS-Chem is interfaced into WRF (as WRF-GC)
+     ! GEOS-Chem is interfaced into WRF (as WRF-GC) or CESM
      !----------------------------------------------------------------------
      REAL(f4),           POINTER :: KppError(:,:,:)
      LOGICAL                     :: Archive_KppError
@@ -1519,6 +1522,10 @@ CONTAINS
     State_Diag%Map_SatDiagnRxnRate                 => NULL()
     State_Diag%Archive_SatDiagnRxnRate             = .FALSE.
 
+    State_Diag%RxnConst                            => NULL()
+    State_Diag%Map_RxnConst                        => NULL()
+    State_Diag%Archive_RxnConst                    = .FALSE.
+
     State_Diag%OHreactivity                        => NULL()
     State_Diag%Archive_OHreactivity                = .FALSE.
 
@@ -1551,6 +1558,9 @@ CONTAINS
 
     State_Diag%CH4pseudoflux                       => NULL()
     State_Diag%Archive_CH4pseudoflux               = .FALSE.
+
+    State_Diag%H2pseudoflux                        => NULL()
+    State_Diag%Archive_H2pseudoflux                = .FALSE.
 
     State_Diag%SatDiagnLoss                        => NULL()
     State_Diag%Map_SatDiagnLoss                    => NULL()
@@ -2385,10 +2395,10 @@ CONTAINS
     State_Diag%Archive_CO2photrate                 = .FALSE.
 #endif
 
-#if defined( MODEL_GEOS ) || defined( MODEL_WRF )
+#if defined( MODEL_GEOS ) || defined( MODEL_WRF ) || defined( MODEL_CESM )
     !=======================================================================
     ! These diagnostics are only activated when running GC
-    ! either in NASA/GEOS or in WRF
+    ! either in NASA/GEOS, WRF, or CESM
     !=======================================================================
     State_Diag%KppError                            => NULL()
     State_Diag%Archive_KppError                    = .FALSE.
@@ -2486,10 +2496,10 @@ CONTAINS
     !------------------------------------------------------------------------
     ! Write header
     !------------------------------------------------------------------------
-    IF ( Input_Opt%amIRoot ) THEN
-    WRITE( 6, 10 )
- 10 FORMAT( /, 'Allocating the following fields of the State_Diag object:' )
-    WRITE( 6, '(a)' ) REPEAT( '=', 79 )
+    IF ( Input_Opt%amIRoot .and. Input_Opt%Verbose ) THEN
+       WRITE( 6, 10 )
+ 10    FORMAT(/, 'Allocating the following fields of the State_Diag object:')
+       WRITE( 6, '(a)' ) REPEAT( '=', 79 )
     ENDIF
 
     !------------------------------------------------------------------------
@@ -3909,9 +3919,9 @@ CONTAINS
     !=======================================================================
     ! The following diagnostic quantities are only relevant for:
     !
-    ! THE Rn-Pb-Be-Passive SPECIALTY SIMULATION
+    ! THE TransportTracers SPECIALTY SIMULATION
     !=======================================================================
-    IF ( Input_Opt%ITS_A_RnPbBe_SIM ) THEN
+    IF ( Input_Opt%ITS_A_TRACER_SIM ) THEN
 
        !--------------------------------------------------------------------
        ! Emission of Pb210 from Rn222 decay
@@ -3963,7 +3973,7 @@ CONTAINS
        !-------------------------------------------------------------------
        ! Halt with an error message if any of the following quantities
        ! have been requested as diagnostics in simulations other than
-       ! the Rn-Pb-Be-Passive simulation.
+       ! the TransportTracers simulation.
        !
        ! This will prevent potential errors caused by the quantities
        ! being requested as diagnostic output when the corresponding
@@ -3983,7 +3993,7 @@ CONTAINS
           CALL Check_DiagList( am_I_Root, Diag_List, diagID, Found, RC  )
           IF ( Found ) THEN
              ErrMsg = TRIM( diagId ) // ' is a requested diagnostic, '    // &
-                      'but this is only appropriate for Rn-Pb-Be-Passive '// &
+                      'but this is only appropriate for TransportTracers '// &
                       'simulations.'
              CALL GC_Error( ErrMsg, RC, ThisLoc )
              RETURN
@@ -4487,37 +4497,42 @@ CONTAINS
 
     !------------------------------------------------------------------------
     ! Set a single logical for SatDiagn output
+    ! For ease of comparison, place fields in alphabetical order
     !------------------------------------------------------------------------
     State_Diag%Archive_SatDiagn = (                                          &
-         State_Diag%Archive_SatDiagnColEmis                             .or. &
-         State_Diag%Archive_SatDiagnSurfFlux                            .or. &
-         State_Diag%Archive_SatDiagnOH                                  .or. &
-         State_Diag%Archive_SatDiagnRH                                  .or. &
          State_Diag%Archive_SatDiagnAirDen                              .or. &
          State_Diag%Archive_SatDiagnBoxHeight                           .or. &
-         State_Diag%Archive_SatDiagnPEdge                               .or. &
-         State_Diag%Archive_SatDiagnTROPP                               .or. &
-         State_Diag%Archive_SatDiagnPBLHeight                           .or. &
-         State_Diag%Archive_SatDiagnPBLTop                              .or. &
-         State_Diag%Archive_SatDiagnTAir                                .or. &
+         State_Diag%Archive_SatDiagnColEmis                             .or. &
+         State_Diag%Archive_SatDiagnConc                                .or. &
+         State_Diag%Archive_SatDiagnDryDep                              .or. &
+         State_Diag%Archive_SatDiagnDryDepVel                           .or. &
          State_Diag%Archive_SatDiagnGWETROOT                            .or. &
          State_Diag%Archive_SatDiagnGWETTOP                             .or. &
-         State_Diag%Archive_SatDiagnPARDR                               .or. &
-         State_Diag%Archive_SatDiagnPARDF                               .or. &
-         State_Diag%Archive_SatDiagnPRECTOT                             .or. &
-         State_Diag%Archive_SatDiagnSLP                                 .or. &
-         State_Diag%Archive_SatDiagnSPHU                                .or. &
-         State_Diag%Archive_SatDiagnTS                                  .or. &
-         State_Diag%Archive_SatDiagnPBLTOPL                             .or. &
-         State_Diag%Archive_SatDiagnMODISLAI                            .or. &
-         State_Diag%Archive_SatDiagnWetLossLS                           .or. &
-         State_Diag%Archive_SatDiagnWetLossConv                         .or. &
          State_Diag%Archive_SatDiagnJval                                .or. &
          State_Diag%Archive_SatDiagnJvalO3O1D                           .or. &
          State_Diag%Archive_SatDiagnJvalO3O3P                           .or. &
-         State_Diag%Archive_SatDiagnDryDep                              .or. &
-         State_Diag%Archive_SatDiagnDryDepVel                           .or. &
-         State_Diag%Archive_SatDiagnOHreactivity                            )
+         State_Diag%Archive_SatDiagnLoss                                .or. &
+         State_Diag%Archive_SatDiagnMODISLAI                            .or. &
+         State_Diag%Archive_SatDiagnOH                                  .or. &
+         State_Diag%Archive_SatDiagnOHreactivity                        .or. &
+         State_Diag%Archive_SatDiagnPARDF                               .or. &
+         State_Diag%Archive_SatDiagnPARDR                               .or. &
+         State_Diag%Archive_SatDiagnPBLHeight                           .or. &
+         State_Diag%Archive_SatDiagnPBLTop                              .or. &
+         State_Diag%Archive_SatDiagnPBLTopL                             .or. &
+         State_Diag%Archive_SatDiagnPEdge                               .or. &
+         State_Diag%Archive_SatDiagnPRECTOT                             .or. &
+         State_Diag%Archive_SatDiagnProd                                .or. &
+         State_Diag%Archive_SatDiagnRH                                  .or. &
+         State_Diag%Archive_SatDiagnRxnRate                             .or. &
+         State_Diag%Archive_SatDiagnSLP                                 .or. &
+         State_Diag%Archive_SatDiagnSPHU                                .or. &
+         State_Diag%Archive_SatDiagnSurfFlux                            .or. &
+         State_Diag%Archive_SatDiagnTAir                                .or. &
+         State_Diag%Archive_SatDiagnTROPP                               .or. &
+         State_Diag%Archive_SatDiagnTS                                  .or. &
+         State_Diag%Archive_SatDiagnWetLossLS                           .or. &
+         State_Diag%Archive_SatDiagnWetLossConv                             )
 
     !------------------------------------------------------------------------
     ! Satellite diagnostic: Counter
@@ -5072,6 +5087,30 @@ CONTAINS
        ENDIF
 
        !--------------------------------------------------------------------
+       ! KPP Reaction Rate Constants
+       !--------------------------------------------------------------------
+       diagID  = 'RxnConst'
+       CALL Init_and_Register(                                               &
+            Input_Opt      = Input_Opt,                                      &
+            State_Chm      = State_Chm,                                      &
+            State_Diag     = State_Diag,                                     &
+            State_Grid     = State_Grid,                                     &
+            DiagList       = Diag_List,                                      &
+            TaggedDiagList = TaggedDiag_List,                                &
+            Ptr2Data       = State_Diag%RxnConst,                            &
+            archiveData    = State_Diag%Archive_RxnConst,                    &
+            mapData        = State_Diag%Map_RxnConst,                        &
+            diagId         = diagId,                                         &
+            diagFlag       = 'R',                                            &
+            RC             = RC                                             )
+
+       IF ( RC /= GC_SUCCESS ) THEN
+          errMsg = TRIM( errMsg_ir ) // TRIM( diagId )
+          CALL GC_Error( errMsg, RC, thisLoc )
+          RETURN
+       ENDIF
+
+       !--------------------------------------------------------------------
        ! OH reactivity
        !--------------------------------------------------------------------
        diagID  = 'OHreactivity'
@@ -5492,6 +5531,28 @@ CONTAINS
             TaggedDiagList = TaggedDiag_List,                                &
             Ptr2Data       = State_Diag%CH4pseudoFlux,                       &
             archiveData    = State_Diag%Archive_CH4pseudoFlux,               &
+            diagId         = diagId,                                         &
+            RC             = RC                                             )
+
+       IF ( RC /= GC_SUCCESS ) THEN
+          errMsg = TRIM( errMsg_ir ) // TRIM( diagId )
+          CALL GC_Error( errMsg, RC, thisLoc )
+          RETURN
+       ENDIF
+
+       !--------------------------------------------------------------------
+       ! H2 pseudo-flux
+       !--------------------------------------------------------------------
+       diagID  = 'H2pseudoFlux'
+       CALL Init_and_Register(                                               &
+            Input_Opt      = Input_Opt,                                      &
+            State_Chm      = State_Chm,                                      &
+            State_Diag     = State_Diag,                                     &
+            State_Grid     = State_Grid,                                     &
+            DiagList       = Diag_List,                                      &
+            TaggedDiagList = TaggedDiag_List,                                &
+            Ptr2Data       = State_Diag%H2pseudoFlux,                       &
+            archiveData    = State_Diag%Archive_H2pseudoFlux,               &
             diagId         = diagId,                                         &
             RC             = RC                                             )
 
@@ -6051,7 +6112,7 @@ CONTAINS
           RETURN
        ENDIF
 
-#if defined( MODEL_GEOS ) || defined( MODEL_WRF )
+#if defined( MODEL_GEOS ) || defined( MODEL_WRF ) || defined( MODEL_CESM )
        !--------------------------------------------------------------------
        ! KPP error flag
        !--------------------------------------------------------------------
@@ -6086,7 +6147,7 @@ CONTAINS
        ! being requested as diagnostic output when the corresponding
        ! array has not been allocated.
        !-------------------------------------------------------------------
-       DO N = 1, 34
+       DO N = 1, 35
           ! Select the diagnostic ID
           SELECT CASE( N )
              CASE( 1  )
@@ -6165,6 +6226,8 @@ CONTAINS
                 diagID = 'KppcNONZERO'
              CASE( 38 )
                 diagID = 'KppAutoReduceThres'
+             CASE( 39 )
+                diagID = 'RxnConst'
           END SELECT
 
           ! Exit if any of the above are in the diagnostic list
@@ -6307,8 +6370,9 @@ CONTAINS
     ! and THE CH4 SPECIALTY SIMULATION
     !=======================================================================
     IF ( Input_Opt%ITS_A_FULLCHEM_SIM                                   .or. &
+         Input_Opt%ITS_A_CARBON_SIM                                     .or. &
          Input_Opt%ITS_A_CH4_SIM                                        .or. &
-         Input_Opt%ITS_A_CARBON_SIM                                   ) THEN
+         Input_Opt%ITS_A_TAGCH4_SIM                                     ) THEN
 
        !--------------------------------------------------------------------
        ! OH concentration upon exiting the FlexChem solver (fullchem
@@ -8828,7 +8892,9 @@ CONTAINS
     !
     ! THE CH4 SPECIALTY SIMULATION
     !=======================================================================
-    IF ( Input_Opt%ITS_A_CH4_SIM .or. Input_Opt%ITS_A_CARBON_SIM ) THEN
+    IF ( Input_Opt%ITS_A_CH4_SIM      .or. &
+         Input_Opt%ITS_A_TAGCH4_SIM   .or. &
+         Input_Opt%ITS_A_CARBON_SIM ) THEN
 
        !--------------------------------------------------------------------
        ! Loss of CH4 by Cl in troposphere
@@ -10324,16 +10390,25 @@ CONTAINS
     !========================================================================
     ! Print information about the registered fields (short format)
     !========================================================================
-    IF ( Input_Opt%amIRoot ) THEN
+    IF ( Input_Opt%amIRoot .and. Input_Opt%Verbose ) THEN
        WRITE( 6, 30 )
  30    FORMAT( /, &
             'Registered variables contained within the State_Diag object:' )
        WRITE( 6, '(a)' ) REPEAT( '=', 79 )
+
+       ! Print registered fields
+       CALL Registry_Print( Input_Opt   = Input_Opt,                         &
+                            Registry    = State_Diag%Registry,               &
+                            ShortFormat = .TRUE.,                            &
+                            RC          = RC                                )
+
+       ! Trap potential errors
+       IF ( RC /= GC_SUCCESS ) THEN
+          ErrMsg = 'Error encountered in "Registry_Print"!'
+          CALL GC_Error( ErrMsg, RC, ThisLoc )
+          RETURN
+       ENDIF
     ENDIF
-    CALL Registry_Print( Input_Opt   = Input_Opt,                            &
-                         Registry    = State_Diag%Registry,                  &
-                         ShortFormat = .TRUE.,                               &
-                         RC          = RC                                   )
 
     !========================================================================
     ! Set high-level logicals for diagnostics
@@ -10451,13 +10526,6 @@ CONTAINS
                                                3                 ), STAT=RC )
        CALL GC_CheckVar( 'State_Diag%BudgetColumnMass', 0, RC )
        IF ( RC /= GC_SUCCESS ) RETURN
-    ENDIF
-
-    ! Trap potential errors
-    IF ( RC /= GC_SUCCESS ) THEN
-       ErrMsg = 'Error encountered in "Registry_Print"!'
-       CALL GC_Error( ErrMsg, RC, ThisLoc )
-       RETURN
     ENDIF
 
   END SUBROUTINE Init_State_Diag
@@ -10762,6 +10830,12 @@ CONTAINS
     CALL Finalize( diagId   = 'SatDiagnRxnRate',                             &
                    Ptr2Data = State_Diag%SatDiagnRxnRate,                    &
                    mapData  = State_Diag%Map_SatDiagnRxnRate,                &
+                   RC       = RC                                            )
+    IF ( RC /= GC_SUCCESS ) RETURN
+
+    CALL Finalize( diagId   = 'RxnConst',                                    &
+                   Ptr2Data = State_Diag%RxnConst,                           &
+                   mapData  = State_Diag%Map_RxnConst,                       &
                    RC       = RC                                            )
     IF ( RC /= GC_SUCCESS ) RETURN
 
@@ -11126,6 +11200,11 @@ CONTAINS
 
     CALL Finalize( diagId   = 'CH4pseudoFlux',                               &
                    Ptr2Data = State_Diag%CH4pseudoFlux,                      &
+                   RC       = RC                                            )
+    IF ( RC /= GC_SUCCESS ) RETURN
+
+    CALL Finalize( diagId   = 'H2pseudoFlux',                               &
+                   Ptr2Data = State_Diag%H2pseudoFlux,                      &
                    RC       = RC                                            )
     IF ( RC /= GC_SUCCESS ) RETURN
 
@@ -12041,10 +12120,10 @@ CONTAINS
     IF ( RC /= GC_SUCCESS ) RETURN
 #endif
 
-#if defined(MODEL_GEOS) || defined(MODEL_WRF)
+#if defined( MODEL_GEOS ) || defined( MODEL_WRF ) || defined( MODEL_CESM )
     !=======================================================================
     ! These fields are only used when GEOS-Chem
-    ! is interfaced to NASA/GEOS or to WRF (as WRF-GC)
+    ! is interfaced to NASA/GEOS, WRF (as WRF-GC), or CESM
     !=======================================================================
     CALL Finalize( diagId   = 'KppError',                                    &
                    Ptr2Data = State_Diag%KppError,                           &
@@ -12504,7 +12583,13 @@ CONTAINS
 
     ELSE IF ( TRIM( Name_AllCaps ) == 'SATDIAGNRXNRATE' ) THEN
        IF ( isDesc    ) Desc  = 'KPP equation reaction rates'
-       IF ( isUnits   ) Units = 's-1'
+       IF ( isUnits   ) Units = 'molec cm-3 s-1'
+       IF ( isRank    ) Rank  = 3
+       IF ( isTagged  ) TagId = 'RXN'
+
+    ELSE IF ( TRIM( Name_AllCaps ) == 'RXNCONST' ) THEN
+       IF ( isDesc    ) Desc  = 'KPP equation reaction rate constants'
+       IF ( isUnits   ) Units = '(cm3 molec-1)**(nreactants - 1) s-1'
        IF ( isRank    ) Rank  = 3
        IF ( isTagged  ) TagId = 'RXN'
 
@@ -12955,7 +13040,12 @@ CONTAINS
        IF ( isUnits   ) Units = 'kg m-2 s-1'
        IF ( isRank    ) Rank  = 2
 
-#if defined( MODEL_GEOS ) || defined( MODEL_WRF )
+    ELSE IF ( TRIM( Name_AllCaps ) == 'H2PSEUDOFLUX' ) THEN
+       IF ( isDesc    ) Desc  = 'H2 pseudo-flux balancing chemistry'
+       IF ( isUnits   ) Units = 'kg m-2 s-1'
+       IF ( isRank    ) Rank  = 2
+
+#if defined( MODEL_GEOS ) || defined( MODEL_WRF ) || defined( MODEL_CESM )
     ELSE IF ( TRIM( Name_AllCaps ) == 'KPPERROR' ) THEN
        IF ( isDesc    ) Desc  = 'KppError'
        IF ( isUnits   ) Units = '1'
@@ -14170,7 +14260,7 @@ CONTAINS
        CASE( 'PHO',     'P' )
           numTags = State_Chm%nPhotol
        CASE( 'UVFLX',   'U' )
-          numTags = W_
+          numTags = State_Chm%Phot%nWLbins
        CASE( 'PRD',     'Y' )
           numTags = State_Chm%nProd
        CASE( 'RRTMG',   'Z' )
@@ -16731,7 +16821,7 @@ CONTAINS
     ENDIF
 
     ! Print info about diagnostic
-    IF ( Input_Opt%amIRoot ) THEN
+    IF ( Input_Opt%amIRoot .and. Input_Opt%Verbose ) THEN
        WRITE( 6, 100 ) ADJUSTL( arrayID ), TRIM( diagID )
  100   FORMAT( 1x, a32, ' is registered as: ', a )
     ENDIF
@@ -16916,7 +17006,7 @@ CONTAINS
     ENDIF
 
     ! Print info about diagnostic
-    IF ( Input_Opt%amIRoot ) THEN
+    IF ( Input_Opt%amIRoot .and. Input_Opt%Verbose ) THEN
        WRITE( 6, 100 ) ADJUSTL( arrayID ), TRIM( diagID )
  100   FORMAT( 1x, a32, ' is registered as: ', a )
     ENDIF
@@ -17097,7 +17187,7 @@ CONTAINS
     ENDIF
 
     ! Print info about diagnostic
-    IF ( Input_Opt%amIRoot ) THEN
+    IF ( Input_Opt%amIRoot .and. Input_Opt%Verbose ) THEN
        WRITE( 6, 100 ) ADJUSTL( arrayID ), TRIM( diagID )
  100   FORMAT( 1x, a32, ' is registered as: ', a )
     ENDIF
@@ -17288,7 +17378,7 @@ CONTAINS
     ENDIF
 
     ! Print info about diagnostic
-    IF ( Input_Opt%amIRoot ) THEN
+    IF ( Input_Opt%amIRoot .and. Input_Opt%Verbose ) THEN
        WRITE( 6, 100 ) ADJUSTL( arrayID ), TRIM( diagID )
  100   FORMAT( 1x, a32, ' is registered as: ', a )
     ENDIF
@@ -17473,7 +17563,7 @@ CONTAINS
     ENDIF
 
     ! Print info about diagnostic
-    IF ( Input_Opt%amIRoot ) THEN
+    IF ( Input_Opt%amIRoot .and. Input_Opt%Verbose ) THEN
        WRITE( 6, 100 ) ADJUSTL( arrayID ), TRIM( diagID )
  100   FORMAT( 1x, a32, ' is registered as: ', a )
     ENDIF
@@ -17651,7 +17741,7 @@ CONTAINS
     ENDIF
 
     ! Print info about diagnostic
-    IF ( Input_Opt%amIRoot ) THEN
+    IF ( Input_Opt%amIRoot .and. Input_Opt%Verbose ) THEN
        WRITE( 6, 100 ) ADJUSTL( arrayID ), TRIM( diagID )
  100   FORMAT( 1x, a32, ' is registered as: ', a )
     ENDIF

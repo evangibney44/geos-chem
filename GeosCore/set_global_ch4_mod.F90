@@ -23,6 +23,7 @@ MODULE Set_Global_CH4_Mod
 ! !PUBLIC MEMBER FUNCTIONS:
 !
   PUBLIC :: Set_CH4
+  PUBLIC :: Set_H2  
 !
 ! !REVISION HISTORY:
 !  18 Jan 2018 - M. Sulprizio- Initial version
@@ -61,7 +62,7 @@ CONTAINS
     USE State_Grid_Mod,    ONLY : GrdState
     USE State_Met_Mod,     ONLY : MetState
     USE TIME_MOD,          ONLY : GET_TS_DYN
-    USE UnitConv_Mod,      ONLY : Convert_Spc_Units
+    USE UnitConv_Mod
 !
 ! !INPUT PARAMETERS:
 !
@@ -98,13 +99,20 @@ CONTAINS
 !
     ! Scalars
     INTEGER             :: I, J, L, PBL_TOP, id_CH4, DT
-    CHARACTER(LEN=63)   :: OrigUnit
+    INTEGER             :: OrigUnit
     REAL(fp)            :: CH4, dCH4
     LOGICAL             :: FOUND
 
     ! Strings
     CHARACTER(LEN=255)  :: ErrMsg
     CHARACTER(LEN=255)  :: ThisLoc
+
+#if defined( MODEL_GEOS )
+    REAL(hp), ALLOCATABLE :: GEOS_CH4(:,:,:)
+    LOGICAL               :: USE_GEOS_CH4
+#endif
+    LOGICAL, SAVE         :: FIRST = .TRUE.
+    CHARACTER(LEN=255)    :: SRCNAME
 
     !=================================================================
     ! SET_CH4 begins here!
@@ -126,34 +134,64 @@ CONTAINS
     ! Get dynamic timestep
     DT = GET_TS_DYN()
 
+    FOUND   = .FALSE.
+    SRCNAME = ''
+#if defined( MODEL_GEOS )
+    ALLOCATE(GEOS_CH4(State_Grid%NX,State_Grid%NY,State_Grid%NZ))
+    GEOS_CH4(:,:,:) = 0.0
+    CALL HCO_GC_EvalFld( Input_Opt, State_Grid, 'GEOS_CH4', &
+                         GEOS_CH4, RC, FOUND=FOUND )
+    USE_GEOS_CH4 = FOUND
+    IF ( FOUND ) SRCNAME = 'GEOS_CH4'
+#endif
+
     ! Use the NOAA spatially resolved data where available
-    CALL HCO_GC_EvalFld( Input_Opt, State_Grid, 'NOAA_GMD_CH4', &
-                         State_Chm%SFC_CH4, RC, FOUND=FOUND )
+    IF (.NOT. FOUND ) THEN
+       CALL HCO_GC_EvalFld( Input_Opt, State_Grid, 'NOAA_GMD_CH4', &
+                            State_Chm%SFC_CH4, RC, FOUND=FOUND )
+       IF ( FOUND ) SRCNAME = 'NOAA_GMD_CH4'
+    ENDIF
     IF (.NOT. FOUND ) THEN
        FOUND = .TRUE.
        ! Use the CMIP6 data from Meinshausen et al. 2017, GMD
        ! https://doi.org/10.5194/gmd-10-2057-2017a
        CALL HCO_GC_EvalFld( Input_Opt, State_Grid, 'CMIP6_Sfc_CH4', &
                             State_Chm%SFC_CH4, RC, FOUND=FOUND )
+       IF ( FOUND ) SRCNAME = 'CMIPS_Sfc_CH4'
     ENDIF
     IF (.NOT. FOUND ) THEN
        FOUND = .TRUE.
        ! Use the CMIP6 data boundary conditions processed for GCAP 2.0
-       CALL HCO_GC_EvalFld( Input_Opt, State_Grid, 'SfcVMR_CH4', &
+       CALL HCO_GC_EvalFld( Input_Opt, State_Grid, 'EG_Mod_CH4', &
                             State_Chm%SFC_CH4, RC, FOUND=FOUND )
+       IF ( FOUND ) SRCNAME = 'EG_Mod_CH4'
     ENDIF
     IF (.NOT. FOUND ) THEN
-       ErrMsg = 'Cannot retrieve data for NOAA_GMD_CH4, CMIP6_Sfc_CH4, or ' // &
-                'SfcVMR_CH4 from HEMCO! Make sure the data source ' // &
-                'corresponds to your emissions year in HEMCO_Config.rc ' // &
-                '(NOAA GMD for 1978 and later; else CMIP6).'
-       CALL GC_Error( ErrMsg, RC, ThisLoc )
+       !ErrMsg = 'Cannot retrieve data for NOAA_GMD_CH4, CMIP6_Sfc_CH4, or ' // &
+       !         'EG_Mod_CH4 from HEMCO! Make sure the data source ' // &
+       !         'corresponds to your emissions year in HEMCO_Config.rc ' // &
+       !         '(NOAA GMD for 1978 and later; else CMIP6). To use the last year ' // &
+       !         'available you can change the time cycle flag in HEMCO_Config.rc for ' // &
+       !         'the inventory from RY to CY.'
+       !CALL GC_Error( ErrMsg, RC, ThisLoc )
        RETURN
     ENDIF
 
-    ! Convert species to [v/v dry] for this routine
-    CALL Convert_Spc_Units( Input_Opt, State_Chm, State_Grid, State_Met, &
-                            'v/v dry', RC, OrigUnit=OrigUnit )
+    ! Convert species to [v/v dry] aka [mol/mol dry] for this routine
+    CALL Convert_Spc_Units(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Chm  = State_Chm,                                             &
+         State_Grid = State_Grid,                                            &
+         State_Met  = State_Met,                                             &
+         outUnit    = MOLES_SPECIES_PER_MOLES_DRY_AIR,                       &
+         origUnit   = origUnit,                                              &
+         RC         = RC                                                    )
+
+    ! Add info to logfile
+    IF ( FOUND .AND. Input_Opt%amIRoot .AND. FIRST ) THEN
+       WRITE(*,*) 'Getting CH4 boundary conditions in GEOS-Chem from :'//TRIM(SRCNAME)
+       FIRST = .FALSE.
+    ENDIF 
 
     ! Trap potential errors
     IF ( RC /= GC_SUCCESS ) THEN
@@ -183,6 +221,11 @@ CONTAINS
        ! Prescribe methane concentrations throughout PBL
        DO L=1,PBL_TOP
 
+       ! In GEOS, we may be getting CH4 from a 3D field 
+#if defined( MODEL_GEOS )
+          IF ( USE_GEOS_CH4 ) CH4 = GEOS_CH4(I,J,L)
+#endif
+
           ! Compute implied CH4 flux if diagnostic is on
           IF ( State_Diag%Archive_CH4pseudoFlux ) THEN
              ! v/v dry
@@ -204,8 +247,13 @@ CONTAINS
     !$OMP END PARALLEL DO
 
     ! Convert species back to original unit
-    CALL Convert_Spc_Units( Input_Opt, State_Chm, State_Grid, State_Met, &
-                            OrigUnit, RC )
+    CALL Convert_Spc_Units(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Chm  = State_Chm,                                             &
+         State_Grid = State_Grid,                                            &
+         State_Met  = State_Met,                                             &
+         outUnit    = origUnit,                                              &
+         RC         = RC                                                    )
 
     ! Trap potential errors
     IF ( RC /= GC_SUCCESS ) THEN
@@ -216,4 +264,205 @@ CONTAINS
 
   END SUBROUTINE Set_CH4
 !EOC
+
+
+!------------------------------------------------------------------------------
+!                  GEOS-Chem Global Chemical Transport Model                  !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: set_h2
+!
+! !DESCRIPTION: Subroutine SET\_H2 copies monthly mean surface H2 from
+!  HEMCO and applies it to H2 concentrations in State\_Chm%Species.
+!\\
+!\\
+! !INTERFACE:
+!
+  SUBROUTINE Set_H2( Input_Opt, State_Chm, State_Diag, State_Grid, &
+                      State_Met, RC )
+!
+! !USES:
+!
+    USE ErrCode_Mod
+    USE ERROR_MOD
+    USE HCO_Error_Mod
+    USE HCO_Utilities_GC_Mod, ONLY : HCO_GC_EvalFld
+    USE Input_Opt_Mod,     ONLY : OptInput
+    USE PhysConstants,     ONLY : AIRMW
+    USE State_Chm_Mod,     ONLY : ChmState, Ind_
+    USE State_Diag_Mod,    ONLY : DgnState
+    USE State_Grid_Mod,    ONLY : GrdState
+    USE State_Met_Mod,     ONLY : MetState
+    USE TIME_MOD,          ONLY : GET_TS_DYN
+    USE UnitConv_Mod
+!
+! !INPUT PARAMETERS:
+!
+    TYPE(OptInput), INTENT(IN)    :: Input_Opt ! Input Options object
+    TYPE(GrdState), INTENT(IN)    :: State_Grid! Grid State object
+    TYPE(MetState), INTENT(IN)    :: State_Met ! Meteorology State object
+!
+! !INPUT/OUTPUT PARAMETERS:
+!
+    TYPE(ChmState), INTENT(INOUT) :: State_Chm  ! Chemistry State object
+    TYPE(DgnState), INTENT(INOUT) :: State_Diag ! Diagnostics State object
+!
+! !OUTPUT PARAMETERS:
+!
+    INTEGER,        INTENT(OUT)   :: RC        ! Success or failure?
+!
+! !REMARKS:
+!  Lee Murray wrote:
+!   The monthly mean surface methane mixing ratios used here were spatially
+!   interpolated from NOAA GLOBALVIEW discrete monthly mean flask data using
+!   ordinary kriging for 1983-2016 (ch4_flask_surface_2017-07-28.tar.gz).
+!   Surface mixing ratios are extended back to 1979 and forward to 2020 via
+!   linear extrapolation of the local 1983-1990 and 2011-2016 trends,
+!   respectively.
+!
+! !REVISION HISTORY:
+!  18 Jan 2018 - M. Sulprizio- Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+!
+! !LOCAL VARIABLES:
+!
+    ! Scalars
+    INTEGER             :: I, J, L, PBL_TOP, id_H2, DT
+    INTEGER             :: OrigUnit
+    REAL(fp)            :: H2, dH2
+    LOGICAL             :: FOUND
+
+    ! Strings
+    CHARACTER(LEN=255)  :: ErrMsg
+    CHARACTER(LEN=255)  :: ThisLoc
+
+    !=================================================================
+    ! SET_H2 begins here!
+    !=================================================================
+
+    ! Assume success
+    RC      = GC_SUCCESS
+    ErrMsg  = ''
+    ThisLoc = ' -> at SET_H2 (in module GeosCore/set_global_ch4_mod.F90)'
+
+    ! Skip unless we are doing a fullchem simulation
+    IF ( .not. Input_Opt%ITS_A_FULLCHEM_SIM ) THEN
+       RETURN
+    ENDIF
+
+    ! Get species ID
+    id_H2 = Ind_( 'H2' )
+
+    ! Get dynamic timestep
+    DT = GET_TS_DYN()
+
+    ! Use the NOAA spatially resolved data where available
+    CALL HCO_GC_EvalFld( Input_Opt, State_Grid, 'NOAA_GMD_H2', &
+                            State_Chm%SFC_H2, RC, FOUND=FOUND )
+    IF (.NOT. FOUND ) THEN
+       FOUND = .TRUE.
+       ! Use the CMIP6 data from Meinshausen et al. 2017, GMD
+       ! https://doi.org/10.5194/gmd-10-2057-2017a
+       CALL HCO_GC_EvalFld( Input_Opt, State_Grid, 'CMIP6_Sfc_H2', &
+                            State_Chm%SFC_H2, RC, FOUND=FOUND )
+    ENDIF
+    IF (.NOT. FOUND ) THEN
+       FOUND = .TRUE.
+       ! Use the CMIP6 data boundary conditions processed for GCAP 2.0
+       CALL HCO_GC_EvalFld( Input_Opt, State_Grid, 'EG_Mod_H2', &
+                            State_Chm%SFC_H2, RC, FOUND=FOUND )
+    ENDIF
+    IF (.NOT. FOUND ) THEN
+       !ErrMsg = 'Cannot retrieve data for NOAA_GMD_CH4, CMIP6_Sfc_CH4, or ' // &
+       !         'EG_Mod_H2 from HEMCO! Make sure the data source ' // &
+       !         'corresponds to your emissions year in HEMCO_Config.rc ' // &
+       !         '(NOAA GMD for 1978 and later; else CMIP6). To use the last year ' // &
+       !         'available you can change the time cycle flag in HEMCO_Config.rc for ' // &
+       !         'the inventory from RY to CY.'
+       !CALL GC_Error( ErrMsg, RC, ThisLoc )
+       RETURN
+    ENDIF
+
+    ! Convert species to [v/v dry] aka [mol/mol dry] for this routine
+    CALL Convert_Spc_Units(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Chm  = State_Chm,                                             &
+         State_Grid = State_Grid,                                            &
+         State_Met  = State_Met,                                             &
+         outUnit    = MOLES_SPECIES_PER_MOLES_DRY_AIR,                       &
+         origUnit   = origUnit,                                              &
+         RC         = RC                                                    )
+
+
+    ! Trap potential errors
+    IF ( RC /= GC_SUCCESS ) THEN
+       ErrMsg = 'Unit conversion error at start of "SET_H2"!'
+       CALL GC_Error( ErrMsg, RC, ThisLoc )
+       RETURN
+    ENDIF
+
+    !$OMP PARALLEL DO                            &
+    !$OMP DEFAULT( SHARED )                      &
+    !$OMP PRIVATE( I, J, L, PBL_TOP, H2, dH2 )   &
+    !$OMP SCHEDULE( DYNAMIC )
+    DO J = 1, State_Grid%NY
+    DO I = 1, State_Grid%NX
+
+       ! Top level of boundary layer at (I,J)
+       PBL_TOP = CEILING( State_Met%PBL_TOP_L(I,J) )
+
+       ! Surface H2 from HEMCO is in units [ppbv], convert to [v/v dry]
+       H2 = State_Chm%SFC_H2(I,J) * 1e-9_fp
+
+       ! Zero diagnostics
+       IF ( State_Diag%Archive_H2pseudoFlux ) THEN
+          State_Diag%H2pseudoFlux(I,J) = 0.0_fp
+       ENDIF
+
+       ! Prescribe methane concentrations throughout PBL
+       DO L=1,PBL_TOP
+
+          ! Compute implied H2 flux if diagnostic is on
+          IF ( State_Diag%Archive_H2pseudoFlux ) THEN
+             ! v/v dry
+             dH2 = H2 - State_Chm%Species(id_H2)%Conc(I,J,L)
+             ! Convert to kg/kg dry
+             dH2 = dH2 * State_Chm%SpcData(id_H2)%Info%MW_g / AIRMW
+             ! Convert to kg/m2/s
+             dH2 = dH2 * State_Met%AD(I,J,L) / State_Met%AREA_M2(I,J) / DT
+             ! Accumulate statistics
+             State_Diag%H2pseudoFlux(I,J) = &
+                State_Diag%H2pseudoFlux(I,J) + dH2
+          ENDIF
+
+          State_Chm%Species(id_H2)%Conc(I,J,L) = H2
+       ENDDO
+
+    ENDDO
+    ENDDO
+    !$OMP END PARALLEL DO
+
+    ! Convert species back to original unit
+    CALL Convert_Spc_Units(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Chm  = State_Chm,                                             &
+         State_Grid = State_Grid,                                            &
+         State_Met  = State_Met,                                             &
+         outUnit    = origUnit,                                              &
+         RC         = RC                                                    )
+
+    ! Trap potential errors
+    IF ( RC /= GC_SUCCESS ) THEN
+       ErrMsg = 'Unit conversion error at end of "SET_H2"!'
+       CALL GC_Error( ErrMsg, RC, ThisLoc )
+       RETURN
+    ENDIF
+
+  END SUBROUTINE Set_H2
+!EOC
+
 END MODULE Set_Global_CH4_Mod
